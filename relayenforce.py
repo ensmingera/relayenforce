@@ -45,6 +45,7 @@ job_id = 7
 device_id = 31
 batch_id = 8
 relay_list_key = "list_row_1"
+dry_run = "on"
 
 #------------------------------------------------------------------------------
 
@@ -199,7 +200,8 @@ class TargetDevice:
 
 
                     if len(relaylist) > 0:
-                        # Capture the interface name the relays were detected on.
+                        # Capture the interface name the relays were
+                        # detected on.
                         intf_name = re.search(r"^interface\s(.*)",
                                             intf_cfg_sect.text)
 
@@ -227,7 +229,8 @@ def main(easy):
     # found and we can exit early. Otherwise, DHCP relays were found and
     # there is more work to do.
     if len(target.relay_intfs) == 0:
-        print("\n[+] SUCCESS: No configured DHCP relays were found on {}.\n".format(
+        print("\n[+] "
+            "SUCCESS: No configured DHCP relays were found on {}.\n".format(
             target.name
         ))
         exit(0)
@@ -254,8 +257,9 @@ def main(easy):
             )
 
             if relay_list == "NOTFOUND":
-                print("[!] Key {} does not exist in DHCP relay list!".format
-                      (relay_list_key))
+                print("[!] Key {} does not exist in DHCP relay list!".format(
+                    relay_list_key)
+                )
                 exit(1)
             else:
                 # Split according to delimeter in list.
@@ -309,19 +313,24 @@ def main(easy):
                     cmd = "no " + relay_cmd_prefix + str(badrelay)
 
                     if dry_run == "on":
-                        print("[-] DEBUG: target.dis.send_command({})".format(cmd))
+                        print("[-] DEBUG: target.dis.send_command({})".format(
+                            cmd)
+                        )
                     else:
                         target.dis.send_command(cmd)
 
 
             # Now add the "good" relays in from the list.
-            print("[+] ... Adding relays from list: {}".format(RELAY_LIST_NAME))
+            print("[+] ... Adding relays from list: {}".format(
+                RELAY_LIST_NAME)
+            )
             for goodrelay in auth_relays:
                 cmd = relay_cmd_prefix + " " + str(goodrelay)
                 if dry_run == "on":
                     print("[-] DEBUG: target.dis.send_command({})".format(cmd))
                 else:
-                    print("[-]     ... Adding {} to {}".format(goodrelay, target.relay_intfs[intf_id]['name']))
+                    print("[-]     ... Adding {} to {}".format(
+                        goodrelay, target.relay_intfs[intf_id]['name']))
                     target.dis.send_command(cmd)
 
 
