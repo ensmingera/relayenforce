@@ -195,7 +195,7 @@ class TargetDevice:
 
                         if dhcp_relay_addr != "__none__":
                             # Found a relay, so put it in the list.
-                            relaylist.append(dhcp_relay_addr.group(1))
+                            relaylist.append(dhcp_relay_addr)
 
 
                     if len(relaylist) > 0:
