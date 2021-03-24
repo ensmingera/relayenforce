@@ -173,11 +173,11 @@ class TargetDevice:
 
                 # Relay command differs between OS types
                 if self.os_type == "ASA":
-                    re_cmd_prefix = r"dhcprelay server "
+                    helper_re = r"dhcprelay server\s+(\S+)$"
                 elif self.os_type == "NXOS":
-                    re_cmd_prefix = r"ip dhcp relay address "
+                    helper_re = r"ip dhcp relay address\s+(\S+)$"
                 else:  # self.os_type == "IOS"
-                    re_cmd_prefix = r"ip helper-address "
+                    helper_re = r"ip helper-address\s+(\S+)$"
 
                 # Iterate through child objects of the interface
                 for intf_cfg_sect in ccp_parse.find_objects(r'^interface'):
@@ -190,9 +190,10 @@ class TargetDevice:
                     for intf_cfg_obj in intf_cfg_sect.children:
 
                         # Regex out the relay IP address
-                        dhcp_relay_addr = re.search((r'\s+' + re_cmd_prefix + '(([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}))'), intf_cfg_obj.text)
+                        dhcp_relay_addr = intf_cfg_obj.re_match_typed(
+                            helper_re, default="__none__")
 
-                        if dhcp_relay_addr is not None:
+                        if dhcp_relay_addr != "__none__":
                             # Found a relay, so put it in the list.
                             relaylist.append(dhcp_relay_addr.group(1))
 
