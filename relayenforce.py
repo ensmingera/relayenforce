@@ -173,11 +173,11 @@ class TargetDevice:
 
                 # Relay command differs between OS types
                 if self.os_type == "ASA":
-                    helper_re = r"dhcprelay server\s+(\S+)$"
+                    helper_re = r"dhcprelay\s+server\s+(\S+)$"
                 elif self.os_type == "NXOS":
-                    helper_re = r"ip dhcp relay address\s+(\S+)$"
+                    helper_re = r"ip\s+dhcp\s+relay\s+address\s+(\S+)$"
                 else:  # self.os_type == "IOS"
-                    helper_re = r"ip helper-address\s+(\S+)$"
+                    helper_re = r"ip\s+helper-address\s+(\S+)$"
 
                 # Iterate through child objects of the interface
                 for intf_cfg_sect in ccp_parse.find_objects(r'^interface'):
