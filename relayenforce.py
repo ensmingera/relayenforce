@@ -29,7 +29,8 @@
 #   IOS, IOS-XE, NX-OS, and ASA/ASAv devices.
 #
 # PREQUISITES:
-#   Sandbox must have CiscoConfParse module installed.
+#   1. NetMRI version 7.5+
+#   2. Sandbox must have CiscoConfParse module installed.
 from infoblox_netmri.easy import NetMRIEasy
 from ciscoconfparse import CiscoConfParse
 import re
@@ -53,7 +54,8 @@ dry_run = "on"
 # value column name that is used in your NetMRI environment.
 RELAY_LIST_NAME = "DHCP Relays"
 RELAY_LIST_KEY = "Key"
-RELAY_LIST_KEYVAL = "Hosts"
+RELAY_LIST_KEYVAL = "Relays"
+RELAY_LIST_EXCLUSIONS = "Exclusions"
 
 
 easyparams = {
@@ -104,16 +106,18 @@ class TargetDevice:
             # CiscoConfParse defaults to IOS
             self.os_type = "IOS"
 
-        print("[~] Target: {}".format(self.name))
-        print("[~] Syntax: {}".format(self.os_type))
-        print("-" * 72)
+        self.dis.log_message("info", f"[~] Target: {self.name}")
+        self.dis.log_message("info", f"[~] Syntax: {self.os_type}")
+        self.dis.log_message("info", "-" * 72)
 
         # Get operational up/up interfaces
-        print("[~] Getting active UP/UP interfaces ...")
+        self.dis.log_message("info", "[~] Getting active UP/UP interfaces ...")
         self.get_active_interfaces()
 
         # Get configured DHCP relays
-        print("[~] Searching for DHCP relays on interfaces ...")
+        self.dis.log_message("info", 
+            "[~] Searching for DHCP relays on interfaces ..."
+        )
         self.process_relay_interfaces()
 
 
@@ -210,17 +214,17 @@ class TargetDevice:
                         # relay_intf dictionary.
                         ri_key = len(self.relay_intfs)
                         self.relay_intfs[ri_key] = \
-                            {
+                        {
                             'name': intf_name.group(1),
                             'relays': relaylist
                         }
 
 
 def main(easy):
-    print("-" * 72)
-    print("DHCP Relay Change and Enforce\n"
-          "Austin Ensminger - Infoblox - 2020")
-    print("-" * 72)
+    easy.log_message("info", "-" * 72)
+    easy.log_message("info", "DHCP Relay Change and Enforce")
+    easy.log_message("info", "Austin Ensminger - Infoblox - 2020")
+    easy.log_message("info", "-" * 72)
 
     # Instantiate the current device (TargetDevice class)
     target = TargetDevice(easy, easy.get_device())
@@ -229,21 +233,22 @@ def main(easy):
     # found and we can exit early. Otherwise, DHCP relays were found and
     # there is more work to do.
     if len(target.relay_intfs) == 0:
-        print("\n[+] "
-            "SUCCESS: No configured DHCP relays were found on {}.\n".format(
-            target.name
-        ))
+        easy.log_message("info", 
+            f"[+] SUCCESS: No DHCP relays were found on {target.name}."
+        )
         exit(0)
 
     # The real work begins.
     # Dictionary contains interfaces with relays. So let's check and fix them.
     else:
-        print("-" * 72)
+        easy.log_message("info", "-" * 72)
 
         # If the relay_list_key wasn't supplied by the user, then it will be
         # assigned the default value of the Script-Variable.
         if relay_list_key == "Row ID Key from DHCP Relay List":  # <- Default
-            print("[!] ERROR: A list key must be supplied.")
+            easy.log_message("error",
+                "[!] ERROR: A list key must be supplied."
+            )
             # Exit with error.
             exit(1)
         else:
@@ -257,13 +262,28 @@ def main(easy):
             )
 
             if relay_list == "NOTFOUND":
-                print("[!] Key {} does not exist in DHCP relay list!".format(
-                    relay_list_key)
+                easy.log_message("error",
+                    f"[!] Key \"{relay_list_key}\" does not exist in "
+                    f"{RELAY_LIST_NAME}."
                 )
                 exit(1)
             else:
                 # Split according to delimeter in list.
                 auth_relays = relay_list.split(',')
+            
+            # Get any excluded relays from that same list, reuse relay_list
+            relay_list = target.dis.get_list_value(
+                RELAY_LIST_NAME,
+                RELAY_LIST_KEY,
+                str(relay_list_key),
+                RELAY_LIST_EXCLUSIONS,
+                'NOTFOUND'
+            )
+            if relay_list != "NOTFOUND":
+                excluded_relays = relay_list.split(',')
+
+        # Free relay_list
+        relay_list = None
 
         # Go through each interface and look at the configured relays.
         # If the relay does not exist in the NetMRI list, then it will
@@ -277,19 +297,22 @@ def main(easy):
 
             bad_relays = []
 
-            print("\n[+] Working in interface: {}".format
-                  (target.relay_intfs[intf_id]['name']))
+            easy.log_message("info", 
+                "[+] Working in interface: "
+                f"{target.relay_intfs[intf_id]['name']}"
+            )
             # Check if the relay is in the list.
             for relay in target.relay_intfs[intf_id]['relays']:
                 # Relay isn't in the list, so we keep it for removal.
-                if relay not in auth_relays:
+                if relay not in auth_relays and relay not in excluded_relays:
                     bad_relays.append(relay)
-
 
             # First, enter the interface sub-config to begin work.
             cmd = "interface " + str(target.relay_intfs[intf_id]['name'])
             if dry_run == "on":
-                print("[-] DEBUG: target.dis.send_command({})".format(cmd))
+                easy.log_message("debug", 
+                    f"[-] DEBUG: target.dis.send_command({cmd})"
+                )
             else:
                 target.dis.send_command(cmd)
 
@@ -308,29 +331,32 @@ def main(easy):
             if len(bad_relays) > 0:
                 # Remove the "bad" relays.
                 for badrelay in bad_relays:
-                    print("[-] ... Removing {} from {}".format
-                          (badrelay, target.relay_intfs[intf_id]['name']))
+                    easy.log_message("info",
+                        f"[-] ... Removing {badrelay} "
+                        f"from {target.relay_intfs[intf_id]['name']}"
+                    )
                     cmd = "no " + relay_cmd_prefix + str(badrelay)
 
                     if dry_run == "on":
-                        print("[-] DEBUG: target.dis.send_command({})".format(
-                            cmd)
+                        easy.log_message("debug",
+                            f"[-] DEBUG: target.dis.send_command({cmd})"
                         )
                     else:
                         target.dis.send_command(cmd)
 
 
             # Now add the "good" relays in from the list.
-            print("[+] ... Adding relays from list: {}".format(
-                RELAY_LIST_NAME)
-            )
             for goodrelay in auth_relays:
+                easy.log_message("info", 
+                    f"[+] ... Adding {goodrelay} "
+                    f"to {target.relay_intfs[intf_id]['name']}"
+                )
                 cmd = relay_cmd_prefix + " " + str(goodrelay)
                 if dry_run == "on":
-                    print("[-] DEBUG: target.dis.send_command({})".format(cmd))
+                    easy.log_message("debug",
+                        f"[-] DEBUG: target.dis.send_command({cmd})"
+                    )
                 else:
-                    print("[-]     ... Adding {} to {}".format(
-                        goodrelay, target.relay_intfs[intf_id]['name']))
                     target.dis.send_command(cmd)
 
 
@@ -339,7 +365,7 @@ def main(easy):
             target.exit_global_config(True)
 
     # All done!
-    print("\n[+] SUCCESS: Job completed for {}\n".format(target.name))
+    easy.log_message("info", f"[+] SUCCESS: Job completed for {target.name}")
     exit(0)
 
 
