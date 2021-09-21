@@ -351,7 +351,7 @@ def main(easy):
                     f"[+] ... Adding {goodrelay} "
                     f"to {target.relay_intfs[intf_id]['name']}"
                 )
-                cmd = relay_cmd_prefix + " " + str(goodrelay)
+                cmd = relay_cmd_prefix + str(goodrelay)
                 if dry_run == "on":
                     easy.log_message("debug",
                         f"[-] DEBUG: target.dis.send_command({cmd})"
