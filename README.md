@@ -8,4 +8,6 @@ The script assumes that the relays are configured on a per-interface basis
 and that the relay is in the global VRF. It additionally will only run on
 IOS, IOS-XE, NX-OS, and ASA/ASAv devices.
 
-Sandbox must have CiscoConfParse module installed.
+Prerequisites:
+1. Sandbox must have CiscoConfParse module installed.
+2. NetMRI version must be 7.5 or higher.
