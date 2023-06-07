@@ -1,5 +1,28 @@
-#!/usr/bin/env python3
+# BEGIN-INTERNAL-SCRIPT-BLOCK
+# Script:
+# 	Cisco Change DHCP Helper Addresses
 #
+# Script-Description:
+# 	This script will remove unauthorized/invalid DHCP relay helpers that are 
+#   configured on Cisco IOS, IOS-XE, NX-OS, or ASA devices and then replace
+#   them using a delimited key value list defined in NetMRI.
+# 	
+# 	The script assumes that the relays are configured on a per-interface basis
+#   and that the relay is in the global VRF. It additionally will only run on
+#   IOS, IOS-XE, NX-OS, and ASA/ASAv devices.
+#
+# END-INTERNAL-SCRIPT-BLOCK
+# These are to just keep Pylance happy.
+# Uncomment to make your Pylance happy too.
+#api_url = "http://netmri"
+#http_username = "austin"
+#http_password = "ensminger"
+#job_id = 7
+#device_id = 31
+#batch_id = 8
+#relay_list_key = "list_row_1"
+#dry_run = "on"
+#------------------------------------------------------------------------------
 # relayenforce.py
 #
 # Copyright (c) 2020 Infoblox, Inc.
@@ -21,7 +44,7 @@
 #
 # DESCRIPTION:
 #   This script will remove unauthorized/invalid DHCP relay helpers that are
-#   configured on Cisco devices and then replace them using a delimeted
+#   configured on Cisco devices and then replace them using a delimited
 #   key value list defined in NetMRI.
 #
 #   The script assumes that the relays are configured on a per-interface basis
@@ -30,50 +53,32 @@
 #
 # PREQUISITES:
 #   1. NetMRI version 7.5+
-#   2. Sandbox must have CiscoConfParse module installed.
+#   2. NetMRI Sandbox version 7.5+
+#   3. CiscoDevice.py imported in to NetMRI
+#   4. List in NetMRI with name that matches RELAY_LIST_NAME.
+#   5. List must have the following columns: Key, Relays, Exclusions
+#       a. The Key column contains the key for which row you want to use.
+#       b. The Relays column must contain the IP addresses of the relays.
+#          If there are multiple entries, seperate them with commas.
+#       c. The Exclusions column is for relay addresses that you want to remain
+#          on the interface (e.g: Cisco ISE). Seperate multiple entries with
+#          commas.
+#       An example CSV to import would look like:
+#       # Name: DHCP Relays
+#       # Description: Used by the Cisco Change DHCP Helper Addresses script
+#       "Key","Relays","Exclusions"
+#       "Site-001","192.168.255.67,192.168.255.68","10.100.1.1,10.200.1.1"
+#
 from infoblox_netmri.easy import NetMRIEasy
-from ciscoconfparse import CiscoConfParse
-import re
-
+from CiscoDevice import CiscoDevice
 #------------------------------------------------------------------------------
-
-# These are to just keep pylint happy.
-# Comment or remove for production
-api_url = "http://netmri"
-http_username = "austin"
-http_password = "ensminger"
-job_id = 7
-device_id = 31
-batch_id = 8
-relay_list_key = "list_row_1"
-dry_run = "on"
-
-#------------------------------------------------------------------------------
-
-# Change the below global variables to match the list name, key name, and key
-# value column name that is used in your NetMRI environment.
-RELAY_LIST_NAME = "DHCP Relays"
-RELAY_LIST_KEY = "Key"
-RELAY_LIST_KEYVAL = "Relays"
-RELAY_LIST_EXCLUSIONS = "Exclusions"
-
-
-easyparams = {
-    "api_url": api_url,
-    "http_username": http_username,
-    "http_password": http_password,
-    "job_id": job_id,
-    "device_id": device_id,
-    "batch_id": batch_id
-}
-
 # BEGIN-SCRIPT-BLOCK
 #
 #   Script-Filter:
 #       $Vendor eq "Cisco"
 #       and $sysDescr like /IOS|NX-OS|Adaptive Security Appliance/
 #
-#   Script-Timeout: 1200
+#   Script-Timeout: 1800
 #
 #   Script-Login:
 #       true
@@ -83,160 +88,41 @@ easyparams = {
 #       $dry_run boolean
 #
 # END-SCRIPT-BLOCK
-
 #------------------------------------------------------------------------------
-
-
-class TargetDevice:
-    def __init__(self, easy_class, device_class):
-        self.dis = easy_class               # NetMRI Easy instance
-        self.device = device_class          # Device instance
-        self.name = device_class.DeviceName # Target name
-        self.os_type = None                 # Target OS type
-        self.active_intfs = []              # Active interfaces on device
-        self.relay_intfs = {}               # Configured relays (per interface)
-
-        # Figure out what OS type the device is.
-        # This will determine what CLI syntax to use.
-        if re.search(r'Adaptive Security', self.device.DeviceSysDescr):
-            self.os_type = "ASA"
-        elif re.search(r'NX-OS', self.device.DeviceSysDescr):
-            self.os_type = "NXOS"
-        else:
-            # CiscoConfParse defaults to IOS
-            self.os_type = "IOS"
-
-        self.dis.log_message("info", f"[~] Target: {self.name}")
-        self.dis.log_message("info", f"[~] Syntax: {self.os_type}")
-        self.dis.log_message("info", "-" * 72)
-
-        # Get operational up/up interfaces
-        self.dis.log_message("info", "[~] Getting active UP/UP interfaces ...")
-        self.get_active_interfaces()
-
-        # Get configured DHCP relays
-        self.dis.log_message("info", 
-            "[~] Searching for DHCP relays on interfaces ..."
-        )
-        self.process_relay_interfaces()
-
-
-    def enter_global_config(self):
-        """
-        Enter global configuration mode on the Cisco device.
-        """
-        self.dis.send_command("configure terminal")
-
-
-    def exit_global_config(self, commit_config):
-        """
-        Exit global configuration.
-        """
-        self.dis.send_command("end")
-        if commit_config is True:
-            self.dis.send_command("copy running-config startup-config\r\r")
-
-
-    def get_active_interfaces(self):
-        """
-        Get interfaces that are up/up with an IP address assigned.
-        """
-        # Set up 'show' command to send to device
-        # Command always starts with 'show'
-        cmd = "show "
-        if self.os_type == "ASA":
-            cmd = cmd + "int ip br | ex ^Interface|Internal"
-        elif self.os_type == "NXOS":
-            cmd = cmd + "ip int br | ex \"(^$|Interface|down)\""
-        else:  # self.os_type == "IOS"
-            cmd = cmd + "ip int br | ex (Proto|unassign|down|Any|NVI)"
-
-        # Send the show command
-        raw_output = self.dis.send_command(cmd)
-
-        # Regex the CLI output to get the interface list.
-        self.active_intfs = re.findall(r'^([^\s]+)', raw_output, re.MULTILINE)
-
-
-    def process_relay_interfaces(self):
-        """
-        Finds interfaces with DHCP relays configured and stores them
-        in a dictionary.
-        """
-        if isinstance(self.active_intfs, list):
-            for intf_id in self.active_intfs:
-                # Get the raw 'show run' output
-                cmd = "show run interface " + intf_id
-                raw_output = self.dis.send_command(cmd)
-
-                # Send the raw output to CiscoConfParse
-                ccp_input = raw_output.splitlines()
-                ccp_parse = CiscoConfParse(
-                    ccp_input,
-                    syntax=self.os_type.lower()
-                )
-
-                # Relay command differs between OS types
-                if self.os_type == "ASA":
-                    helper_re = r"dhcprelay\s+server\s+(\S+)$"
-                elif self.os_type == "NXOS":
-                    helper_re = r"ip\s+dhcp\s+relay\s+address\s+(\S+)$"
-                else:  # self.os_type == "IOS"
-                    helper_re = r"ip\s+helper-address\s+(\S+)$"
-
-                # Iterate through child objects of the interface
-                for intf_cfg_sect in ccp_parse.find_objects(r'^interface'):
-
-                    # Empty list to hold the configured DHCP relays
-                    relaylist = []
-
-                    # Loop through the interface config and find
-                    # configured DHCP relays.
-                    for intf_cfg_obj in intf_cfg_sect.children:
-
-                        # Regex out the relay IP address
-                        dhcp_relay_addr = intf_cfg_obj.re_match_typed(
-                            helper_re, default="__none__")
-
-                        if dhcp_relay_addr != "__none__":
-                            # Found a relay, so put it in the list.
-                            relaylist.append(dhcp_relay_addr)
-
-
-                    if len(relaylist) > 0:
-                        # Capture the interface name the relays were
-                        # detected on.
-                        intf_name = re.search(r"^interface\s(.*)",
-                                            intf_cfg_sect.text)
-
-                        # Now that we have the interface name and the list of
-                        # configured DHCP relays, we will store that in to the
-                        # relay_intf dictionary.
-                        ri_key = len(self.relay_intfs)
-                        self.relay_intfs[ri_key] = \
-                        {
-                            'name': intf_name.group(1),
-                            'relays': relaylist
-                        }
+# Change the below global variables to match the list name, key name, and key
+# value column name that is used in your NetMRI environment.
+RELAY_LIST_NAME = "DHCP Relays"
+RELAY_LIST_KEY = "Key"
+RELAY_LIST_KEYVAL = "Relays"
+RELAY_LIST_EXCLUSIONS = "Exclusions"
 
 
 def main(easy):
     easy.log_message("info", "-" * 72)
-    easy.log_message("info", "DHCP Relay Change and Enforce")
-    easy.log_message("info", "Austin Ensminger - Infoblox - 2020")
+    easy.log_message("info", "Cisco Change DHCP Helper Addresses")
     easy.log_message("info", "-" * 72)
 
     # Instantiate the current device (TargetDevice class)
-    target = TargetDevice(easy, easy.get_device())
+    target = CiscoDevice(easy)
+
+    easy.log_message("info", f"[~] Target: {target.hostname}")
+    easy.log_message("info", f"[~] Syntax: {target.os}")
+    easy.log_message("info", "-" * 72)
+
+    easy.log_message("info", "[~] Getting active UP/UP interfaces ...")
+    target.get_active_interfaces()
+
+    # Get configured DHCP relays
+    easy.log_message("info", "[~] Searching for DHCP relays on interfaces ...")
+    target.get_relay_interfaces()
 
     # If the dictionary length is zero then no configured DHCP relays were
     # found and we can exit early. Otherwise, DHCP relays were found and
     # there is more work to do.
     if len(target.relay_intfs) == 0:
-        easy.log_message("info", 
-            f"[+] SUCCESS: No DHCP relays were found on {target.name}."
-        )
-        exit(0)
+        easy.log_message("info", f"[+] SUCCESS: No DHCP relays were found on"
+                         f" {target.hostname}.")
+        return
 
     # The real work begins.
     # Dictionary contains interfaces with relays. So let's check and fix them.
@@ -250,10 +136,10 @@ def main(easy):
                 "[!] ERROR: A list key must be supplied."
             )
             # Exit with error.
-            exit(1)
+            raise TypeError("Missing list key")
         else:
             # Get the authorized DHCP relay list from the user supplied key.
-            relay_list = target.dis.get_list_value(
+            relay_list = easy.get_list_value(
                 RELAY_LIST_NAME,
                 RELAY_LIST_KEY,
                 str(relay_list_key),
@@ -266,13 +152,13 @@ def main(easy):
                     f"[!] Key \"{relay_list_key}\" does not exist in "
                     f"{RELAY_LIST_NAME}."
                 )
-                exit(1)
+                raise TypeError("Key not found")
             else:
                 # Split according to delimeter in list.
                 auth_relays = relay_list.split(',')
             
             # Get any excluded relays from that same list, reuse relay_list
-            relay_list = target.dis.get_list_value(
+            relay_list = easy.get_list_value(
                 RELAY_LIST_NAME,
                 RELAY_LIST_KEY,
                 str(relay_list_key),
@@ -316,16 +202,14 @@ def main(easy):
             else:
                 target.dis.send_command(cmd)
 
-
             # Now we'll configure the DHCP relays from the list.
             # First, prepare the command to deconfigure the relays.
-            if target.os_type == "ASA":
+            if target.os == "ASA":
                 relay_cmd_prefix = "dhcprelay server "
-            elif target.os_type == "NXOS":
+            elif target.os == "NX-OS":
                 relay_cmd_prefix = "ip dhcp relay address "
             else:
                 relay_cmd_prefix = "ip helper-address "
-
 
             # If there was relays found then we'll remove them.
             if len(bad_relays) > 0:
@@ -344,7 +228,6 @@ def main(easy):
                     else:
                         target.dis.send_command(cmd)
 
-
             # Now add the "good" relays in from the list.
             for goodrelay in auth_relays:
                 easy.log_message("info", 
@@ -359,16 +242,28 @@ def main(easy):
                 else:
                     target.dis.send_command(cmd)
 
+            easy.log_message("info", "-" * 72)
 
         # Exit and commit config to memory..
         if dry_run == "off":
             target.exit_global_config(True)
 
     # All done!
-    easy.log_message("info", f"[+] SUCCESS: Job completed for {target.name}")
-    exit(0)
+    easy.log_message("info",
+                     f"[+] SUCCESS: Job completed for {target.hostname}")
+    return
 
 
 if __name__ == "__main__":
+
+    easyparams = {
+        "api_url": api_url,
+        "http_username": http_username,
+        "http_password": http_password,
+        "job_id": job_id,
+        "device_id": device_id,
+        "batch_id": batch_id
+    }
+
     with NetMRIEasy(**easyparams) as easy:
         main(easy)
